@@ -1,2 +1,0 @@
-{"name":"votacao-startups","version":"1.0.0","private":true,"engines":{"node":">=22.13"},
-"scripts":{"start":"node src/server.js","seed":"node src/seed.js","test":"node --test tests/regras.test.js"}}
