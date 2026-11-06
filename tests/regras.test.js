@@ -1,6 +1,6 @@
 const os=require('os'),path=require('path');
 process.env.DB_FILE=path.join(os.tmpdir(),'t'+Date.now()+'.db');
-Object.assign(process.env,{AVALIADORES_PASSWORD:'AvaliadoresI9',ADMIN_SECRET:'adm'});
+Object.assign(process.env,{ADMIN_SECRET:'adm'});
 const {test,before,after}=require('node:test'),assert=require('node:assert');
 const server=require('../src/server');let base,crit,id={};
 before(()=>new Promise(r=>server.listen(0,()=>{base='http://localhost:'+server.address().port;r()})));after(()=>server.close());
@@ -8,14 +8,15 @@ const A={'x-admin-secret':'adm'};
 const post=(u,b,ck='',x={})=>fetch(base+u,{method:'POST',headers:{'Content-Type':'application/json',cookie:ck,...x},body:JSON.stringify(b)});
 const get=(u,ck='',x={})=>fetch(base+u,{headers:{cookie:ck,...x}});
 const cks=r=>r.headers.getSetCookie().map(x=>x.split(';')[0]).join('; ');
-const login=async t=>cks(await post('/api/avaliadores/login',{t,senha:'AvaliadoresI9'}));
+const login=async(t,cpf='52998224725')=>cks(await post('/api/avaliadores/login',{t,cpf}));
 const ap=(u,b)=>post(u,b,'',A);
 const painel=async t=>(await get('/api/admin/painel?t='+t,'',A)).json();
 const nt=v=>Object.fromEntries(crit.map(c=>[c.id,v]));
 const aval=(ck,t,sid,notas)=>post('/api/avaliacoes',{t,startup_id:sid,notas},ck);
 
 test('login dos avaliadores',async()=>{
-assert.equal((await post('/api/avaliadores/login',{t:'startups',senha:'x'})).status,401);
+assert.equal((await post('/api/avaliadores/login',{t:'startups',cpf:'11111111111'})).status,400);
+assert.equal((await post('/api/avaliadores/login',{t:'startups',cpf:'52998224726'})).status,400);
 assert.equal((await get('/api/startups?t=startups')).status,403);
 assert.ok(await login('startups'));crit=await(await get('/api/criterios')).json();
 assert.equal(crit.reduce((a,c)=>a+c.peso,0),100)});
@@ -25,17 +26,18 @@ const p=await painel('startups');for(const s of p.startups)id[s.codigo]=s.id;
 assert.deepEqual(Object.keys(id).sort(),['A-1','A-2','I-1','I-2','I-3','I-4','I-5']);
 assert.equal((await painel('hackaton')).startups.length,0)});
 test('avaliação: validação, duplicidade, peso e média',async()=>{
-const ck=await login('startups'),ck2=await login('startups');
+const ck=await login('startups'),ck2=await login('startups','11144477735');
 assert.equal((await aval(ck,'startups',id['I-1'],nt(11))).status,400);
 assert.equal((await aval(ck,'startups',9999,nt(5))).status,400);
 assert.equal((await aval('','startups',id['I-1'],nt(5))).status,403);
 assert.equal((await aval(ck,'startups',id['I-1'],nt(10))).status,200);
 assert.equal((await aval(ck,'startups',id['I-1'],nt(10))).status,409);
+assert.equal((await aval(await login('startups'),'startups',id['I-1'],nt(10))).status,409); // mesmo CPF em outro navegador
 assert.equal((await aval(ck2,'startups',id['I-1'],nt(5))).status,200);
 const n=nt(1);n[crit.find(c=>c.nome==='Solução').id]=10;assert.equal((await aval(ck,'startups',id['I-2'],n)).status,200);
 assert.equal((await aval(ck,'startups',id['A-1'],nt(6))).status,200);
 const p=await painel('startups'),nota=c=>p.startups.find(s=>s.codigo===c).nota;
-assert.equal(nota('I-1'),75);assert.equal(nota('I-2'),28);assert.equal(nota('A-1'),60);assert.equal(nota('A-2'),null)});
+assert.equal(p.avaliadores.length,2);assert.equal(p.avaliadores[0].avaliacoes,3);assert.equal(nota('I-1'),75);assert.equal(nota('I-2'),28);assert.equal(nota('A-1'),60);assert.equal(nota('A-2'),null)});
 test('votação popular só entre as duas melhores',async()=>{
 assert.equal((await ap('/api/admin/config',{t:'startups',chave:'publico_aberto',valor:1})).status,409);
 assert.equal((await ap('/api/admin/config',{t:'startups',chave:'avaliacoes_abertas',valor:0})).status,200);

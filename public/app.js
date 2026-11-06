@@ -22,9 +22,10 @@ const blocoPop=(m,p,ativo)=>`<div class="row"><b>${MODO[m]}</b>${ativo?' <span c
 ${p.startups.length?`<table><tr><th>Código</th><th>Votos</th><th>%</th><th></th></tr>${p.startups.map(s=>`<tr><td><b>${esc(s.codigo)}</b></td><td>${s.votos}</td><td>${s.percentual}%</td><td style="width:40%"><div class="fill" style="width:${s.percentual}%"></div></td></tr>`).join('')}</table>`:'<p>Ainda sem finalistas (nenhuma avaliação).</p>'}<p><small>Total de votos: ${p.total}</small></p></div>`;
 
 /* ---------- AVALIADORES ---------- */
-function login(){root.innerHTML='<h1>Acesso dos avaliadores</h1><div class="row"><p>Digite a senha fornecida pela organização.</p><input id="pw" type="password" placeholder="Senha" autocomplete="off"> <button id="in">Entrar</button></div>';
-const go=()=>guard($('#in'),async()=>{await api('/api/avaliadores/login',{t:T,senha:$('#pw').value});await avaliadores()});
-root.onclick=e=>{if(e.target.id==='in')go()};root.oninput=null;$('#pw').onkeydown=e=>{if(e.key==='Enter')go()};$('#pw').focus()}
+const fmtCpf=v=>String(v).replace(/\D/g,'').slice(0,11).replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d)/,'$1.$2').replace(/(\d{3})(\d{1,2})$/,'$1-$2');
+function login(){root.innerHTML='<h1>Identificação do avaliador</h1><div class="row"><p>Digite seu CPF para começar. Ele será registrado junto às suas avaliações.</p><input id="cpf" inputmode="numeric" maxlength="14" placeholder="000.000.000-00" autocomplete="off"> <button id="in">Entrar</button></div>';
+const go=()=>guard($('#in'),async()=>{await api('/api/avaliadores/login',{t:T,cpf:$('#cpf').value});await avaliadores()});
+root.onclick=e=>{if(e.target.id==='in')go()};root.oninput=e=>{if(e.target.id==='cpf')e.target.value=fmtCpf(e.target.value)};$('#cpf').onkeydown=e=>{if(e.key==='Enter')go()};$('#cpf').focus()}
 
 async function avaliadores(){
 tema(T);const S=await api(`/api/status?t=${T}`);if(!S.avaliador)return login();
@@ -33,7 +34,7 @@ const feitas=new Set(S.avaliadas);let cat=null,num='',cur=null,n={},com='';const
 const grade=()=>{const v=st.filter(s=>(!cat||s.categoria===cat)&&(!num||s.numero===+num));
 $('#grade').innerHTML=!st.length?`<p>Nenhuma ${item.toLowerCase()} cadastrada ainda.</p>`:v.length?`<div class="chips">${v.map(s=>`<button class="cod ${feitas.has(s.id)?'feita':''}" data-av="${s.id}" ${feitas.has(s.id)||!S.avaliacoes_abertas?'disabled':''}>${esc(s.codigo)}${feitas.has(s.id)?' ✓':''}</button>`).join('')}</div>`:'<p>Nenhum resultado para esse filtro.</p>'};
 const lista=()=>{const max=Math.max(0,...st.filter(s=>!cat||s.categoria===cat).map(s=>s.numero));
-root.innerHTML=`<h1>Avaliação — ${item}s</h1>${S.avaliacoes_abertas?'':'<p class="aviso">As avaliações estão encerradas.</p>'}
+root.innerHTML=`<h1>Avaliação — ${item}s</h1><p><small>CPF ${fmtCpf(S.cpf)} · <button class="sec" id="sair" style="min-height:32px;padding:.2rem .6rem">Sair</button></small></p>${S.avaliacoes_abertas?'':'<p class="aviso">As avaliações estão encerradas.</p>'}
 <div class="row"><b>Categoria</b><div class="nota"><button data-cat="I" class="${cat==='I'?'on':''}">Ideação</button><button data-cat="A" class="${cat==='A'?'on':''}">Avançado</button></div>
 <p><b>Número</b> ${max?`<small>(1 a ${max})</small>`:''}<br><input id="num" type="number" min="1" ${max?`max="${max}"`:''} inputmode="numeric" value="${esc(num)}" placeholder="Todos" style="width:8rem"></p></div><div id="grade"></div>`;grade()};
 const form=()=>{const s=st.find(x=>x.id===cur);root.innerHTML=`<h1>${esc(s.codigo)}</h1>${cr.map(c=>`<div class="row"><b>${esc(c.nome)}</b> <small>(${c.peso}%)</small><div class="nota">${Array.from({length:c.nota_max-c.nota_min+1},(_,i)=>c.nota_min+i).map(v=>`<button type="button" data-c="${c.id}" data-v="${v}" class="${n[c.id]===v?'on':''}">${v}</button>`).join('')}</div></div>`).join('')}
@@ -43,6 +44,7 @@ root.innerHTML=`<h1>Revisar: ${esc(s.codigo)}</h1><div class="row">${cr.map(c=>`
 lista();
 root.oninput=e=>{if(e.target.id==='num'){num=e.target.value;grade()}};
 root.onclick=e=>{const b=e.target.closest('button');if(!b)return;const d=b.dataset;
+if(b.id==='sair')return guard(b,async()=>{await api('/api/avaliadores/logout',{t:T});await avaliadores()});
 if(d.cat){cat=cat===d.cat?null:d.cat;lista()}
 if(d.av){cur=+d.av;n={};com='';form()}
 if(d.c){com=$('#com').value;n[d.c]=+d.v;form()}
@@ -104,7 +106,7 @@ return`<h2>${item}s cadastradas: ${L.length} <small>(Ideação: ${nI} · Avança
 <div class="tb"><table><tr><th>Código</th><th>Categoria</th><th>Tags</th><th>Avaliações</th><th></th></tr>${L.map(s=>`<tr><td><b>${esc(s.codigo)}</b></td><td>${CAT[s.categoria]}</td><td><button class="ic ${s.feminina?'on':''}" data-tag="feminina" data-id="${s.id}" data-v="${s.feminina?0:1}" title="${item} Feminina">♀</button> <button class="ic ${s.ensino_medio?'on':''}" data-tag="ensino_medio" data-id="${s.id}" data-v="${s.ensino_medio?0:1}" title="${item} de Ensino Médio">🎓</button></td><td>${s.avaliacoes}</td><td><button class="sec" data-del="${s.id}" data-cod="${esc(s.codigo)}">Excluir</button></td></tr>`).join('')}</table></div>`},
 rk:()=>{const fin=new Set(D.popular.geral.startups.map(s=>s.id));
 const prem=(k,nome)=>{const l=D.startups.filter(s=>s[k]&&s.nota!=null).slice(0,3);return`<div class="row"><b>${nome}</b>${l.length?l.map(s=>`<p>${s.posicao}º — <b>${esc(s.codigo)}</b> (${s.nota.toFixed(2)})${fin.has(s.id)?' ★ finalista geral':''}</p>`).join(''):'<p>Nenhuma avaliada com essa tag.</p>'}</div>`};
-return`<h2>Ranking — ${TR[T].nome}</h2>${tabRank(D.startups,true)}<p><small>★ = uma das duas melhores no geral (vão à votação popular). Os prêmios por tag consideram as notas; decida pela regra do evento se as finalistas gerais ficam de fora.</small></p><h2>Prêmios por tag</h2>${prem('feminina',item+' Feminina')}${prem('ensino_medio',item+' de Ensino Médio')}`},
+return`<h2>Ranking — ${TR[T].nome}</h2>${tabRank(D.startups,true)}<p><small>★ = uma das duas melhores no geral (vão à votação popular). Os prêmios por tag consideram as notas; decida pela regra do evento se as finalistas gerais ficam de fora.</small></p><h2>Prêmios por tag</h2>${prem('feminina',item+' Feminina')}${prem('ensino_medio',item+' de Ensino Médio')}<h2>Avaliadores (${D.avaliadores.length})</h2><div class="row">${D.avaliadores.length?`<table><tr><th>CPF</th><th>Avaliações enviadas</th></tr>${D.avaliadores.map(a=>`<tr><td>${fmtCpf(a.cpf)}</td><td>${a.avaliacoes}</td></tr>`).join('')}</table>`:'<p>Nenhuma avaliação enviada ainda.</p>'}</div>`},
 pop:()=>`<h2>Votação popular — ${TR[T].nome}</h2><p><small>O público só vota nas duas melhores em nota, conforme a votação ativa em "Controles".</small></p>${Object.keys(MODO).map(m=>blocoPop(m,D.popular[m],D.config.modo_publico===m)).join('')}`};
 const render=()=>{root.innerHTML=`<div class="tabs">${[['ctrl','Controles'],['st',item+'s'],['rk','Ranking'],['pop','Votação popular']].map(([k,n])=>`<button class="tab ${tab===k?'on':''}" data-tab="${k}">${n}</button>`).join('')}</div>`+abas[tab]()};
 render();

@@ -25,8 +25,10 @@ const trilha=t=>{if(!TRILHAS.includes(t))throw new Erro(400,'Trilha inválida.')
 const T=req=>trilha(new URL(req.url,'http://x').searchParams.get('t'));
 const cfg=(t,k)=>db.prepare('select valor from config where chave=?').get(t+':'+k)?.valor;
 const on=(t,k)=>cfg(t,k)==='1';
-const exigirAval=(req,t,estrito)=>{if(unsign(cookies(req)['av_'+t])!=='ok'&&(estrito||!isAdmin(req)))throw new Erro(403,'Acesso restrito aos avaliadores.')};
-const unico=f=>{try{return f()}catch(e){if(/UNIQUE/.test(e.message))throw new Erro(409,'Registro já enviado por este navegador.');throw e}};
+const cpfOk=c=>{if(!/^\d{11}$/.test(c)||/^(\d)\1{10}$/.test(c))return false;for(const n of[9,10]){let s=0;for(let i=0;i<n;i++)s+=+c[i]*(n+1-i);if((s*10%11)%10!==+c[n])return false}return true};
+const avCpf=(req,t)=>{const v=unsign(cookies(req)['av_'+t]);return v&&/^\d{11}$/.test(v)?v:null};
+const exigirAval=(req,t,estrito)=>{const c=avCpf(req,t);if(!c&&(estrito||!isAdmin(req)))throw new Erro(403,'Identifique-se com o CPF para avaliar.');return c};
+const unico=f=>{try{return f()}catch(e){if(/UNIQUE/.test(e.message))throw new Erro(409,'Registro já enviado anteriormente.');throw e}};
 
 // Nota de uma avaliação = soma(nota/nota_max * peso) / soma(pesos) * 100. Nota da startup = média das avaliações.
 function ranking(t){
@@ -43,22 +45,22 @@ const l=f.startups.map(s=>({id:s.id,codigo:s.codigo,categoria:s.categoria,votos:
 l.forEach(s=>s.percentual=total?Math.round(s.votos*1000/total)/10:0);out[m]={startups:l,total,empate:f.empate}}return out}
 
 const api={
-'GET /api/status':req=>{const t=T(req),c=cookies(req),d=unsign(c.did),m=cfg(t,'modo_publico');
-return{avaliacoes_abertas:on(t,'avaliacoes_abertas'),publico_aberto:on(t,'publico_aberto'),resultados_liberados:on(t,'resultados_liberados'),modo_publico:m,avaliador:unsign(c['av_'+t])==='ok',
-avaliadas:d?db.prepare('select a.startup_id from avaliacoes a join startups s on s.id=a.startup_id where s.trilha=? and a.device_id=?').all(t,d).map(r=>r.startup_id):[],
+'GET /api/status':req=>{const t=T(req),c=cookies(req),d=unsign(c.did),m=cfg(t,'modo_publico'),cpf=avCpf(req,t);
+return{avaliacoes_abertas:on(t,'avaliacoes_abertas'),publico_aberto:on(t,'publico_aberto'),resultados_liberados:on(t,'resultados_liberados'),modo_publico:m,avaliador:!!cpf,cpf,
+avaliadas:cpf?db.prepare('select a.startup_id from avaliacoes a join startups s on s.id=a.startup_id where s.trilha=? and a.cpf=?').all(t,cpf).map(r=>r.startup_id):[],
 jaVotou:!!d&&!!db.prepare('select 1 from votos_publico where trilha=? and modo=? and device_id=?').get(t,m,d)}},
 'GET /api/criterios':()=>db.prepare('select id,nome,descricao,peso,nota_min,nota_max from criterios where ativo=1 order by id').all().map(r=>({...r})),
 'GET /api/startups':req=>{const t=T(req);exigirAval(req,t);return db.prepare("select id,categoria,numero,categoria||'-'||numero codigo from startups where trilha=? order by categoria,numero").all(t).map(r=>({...r}))},
-'POST /api/avaliadores/login':(req,b)=>{const t=trilha(b.t);if(!E.AVALIADORES_PASSWORD)throw new Erro(500,'Senha dos avaliadores não configurada no servidor.');limite(req);
-if(!igual(b.senha,E.AVALIADORES_PASSWORD)){falha(req);throw new Erro(401,'Senha incorreta.')}
-const sec=secure(req);return{ok:true,__ck:[setc('av_'+t,'ok',sec),...(did(req)?[]:[setc('did',crypto.randomUUID(),sec)])]}},
-'POST /api/avaliacoes':(req,b)=>{const t=trilha(b.t);exigirAval(req,t,true);const d=did(req);if(!d)throw new Erro(403,'Recarregue a página e tente novamente.');
+'POST /api/avaliadores/login':(req,b)=>{const t=trilha(b.t),cpf=String(b.cpf||'').replace(/\D/g,'');if(!cpfOk(cpf))throw new Erro(400,'CPF inválido. Confira os 11 números.');
+const sec=secure(req);return{ok:true,__ck:[setc('av_'+t,cpf,sec),...(did(req)?[]:[setc('did',crypto.randomUUID(),sec)])]}},
+'POST /api/avaliadores/logout':(req,b)=>{const t=trilha(b.t);return{ok:true,__ck:[`av_${t}=; HttpOnly; SameSite=Lax; Path=/; Max-Age=0`]}},
+'POST /api/avaliacoes':(req,b)=>{const t=trilha(b.t);const cpf=exigirAval(req,t,true);
 if(!on(t,'avaliacoes_abertas'))throw new Erro(423,'Avaliações encerradas.');
 const sid=b.startup_id;if(!Number.isInteger(sid)||!db.prepare('select 1 from startups where id=? and trilha=?').get(sid,t))throw new Erro(400,'Startup inválida.');
 const cs=db.prepare('select id,nota_min,nota_max from criterios where ativo=1').all(),n=b.notas||{};
 for(const c of cs)if(!Number.isInteger(n[c.id])||n[c.id]<c.nota_min||n[c.id]>c.nota_max)throw new Erro(400,`Nota inválida em um dos critérios (${c.nota_min} a ${c.nota_max}).`);
 const com=typeof b.comentario==='string'?b.comentario.trim().slice(0,500):'';
-unico(()=>tx(()=>{const id=db.prepare('insert into avaliacoes(startup_id,device_id,comentario) values(?,?,?)').run(sid,d,com).lastInsertRowid;
+unico(()=>tx(()=>{const id=db.prepare('insert into avaliacoes(startup_id,cpf,comentario) values(?,?,?)').run(sid,cpf,com).lastInsertRowid;
 const i=db.prepare('insert into notas values(?,?,?)');for(const c of cs)i.run(id,c.id,n[c.id])}));return{ok:true}},
 'GET /api/finalistas':req=>{const t=T(req),modo=cfg(t,'modo_publico');return{modo,aberto:on(t,'publico_aberto'),startups:finalistas(t,modo).startups.map(({id,codigo,categoria})=>({id,codigo,categoria}))}},
 'POST /api/votos/publico':(req,b)=>{const t=trilha(b.t),d=did(req);if(!d)throw new Erro(403,'Abra a página de votação pelo link oficial.');
@@ -68,7 +70,7 @@ unico(()=>db.prepare('insert into votos_publico(trilha,modo,startup_id,device_id
 'GET /api/resultados':req=>{const t=T(req);if(!on(t,'resultados_liberados')&&!isAdmin(req))throw new Erro(403,'Os resultados ainda não foram liberados.');
 const rk=ranking(t);return{ranking:rk.map(({codigo,categoria,nota,posicao,avaliacoes})=>({codigo,categoria,nota,posicao,avaliacoes})),popular:popular(t,rk)}},
 'GET /api/admin/painel':req=>{adm(req);const t=T(req),rk=ranking(t);
-return{config:{avaliacoes_abertas:on(t,'avaliacoes_abertas'),publico_aberto:on(t,'publico_aberto'),resultados_liberados:on(t,'resultados_liberados'),modo_publico:cfg(t,'modo_publico')},startups:rk,popular:popular(t,rk)}},
+return{config:{avaliacoes_abertas:on(t,'avaliacoes_abertas'),publico_aberto:on(t,'publico_aberto'),resultados_liberados:on(t,'resultados_liberados'),modo_publico:cfg(t,'modo_publico')},startups:rk,popular:popular(t,rk),avaliadores:db.prepare('select a.cpf,count(*) avaliacoes from avaliacoes a join startups s on s.id=a.startup_id where s.trilha=? group by a.cpf order by avaliacoes desc,a.cpf').all(t).map(r=>({...r}))}},
 'POST /api/admin/config':(req,b)=>{adm(req);const t=trilha(b.t);
 if(!['avaliacoes_abertas','publico_aberto','resultados_liberados'].includes(b.chave))throw new Erro(400,'Chave inválida.');
 if(b.valor){if(b.chave==='publico_aberto'){if(on(t,'avaliacoes_abertas'))throw new Erro(409,'Feche as avaliações antes de abrir a votação popular.');
